@@ -1,11 +1,11 @@
 /*
- * Copyright (C) 2019 The Android Open Source Project
+ * Copyright 2019 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *     https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,19 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.example.android.architecture.blueprints.todoapp.statistics
 
-import androidx.arch.core.executor.testing.InstantTaskExecutorRule
-import com.example.android.architecture.blueprints.todoapp.FakeFailingTasksRemoteDataSource
 import com.example.android.architecture.blueprints.todoapp.MainCoroutineRule
+import com.example.android.architecture.blueprints.todoapp.data.FakeTaskRepository
 import com.example.android.architecture.blueprints.todoapp.data.Task
-import com.example.android.architecture.blueprints.todoapp.data.source.DefaultTasksRepository
-import com.example.android.architecture.blueprints.todoapp.data.source.FakeRepository
-import com.example.android.architecture.blueprints.todoapp.getOrAwaitValue
 import com.google.common.truth.Truth.assertThat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.test.runBlockingTest
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -36,84 +38,69 @@ import org.junit.Test
 @ExperimentalCoroutinesApi
 class StatisticsViewModelTest {
 
-    // Executes each task synchronously using Architecture Components.
-    @get:Rule
-    var instantExecutorRule = InstantTaskExecutorRule()
-
     // Subject under test
     private lateinit var statisticsViewModel: StatisticsViewModel
 
     // Use a fake repository to be injected into the viewmodel
-    private lateinit var tasksRepository: FakeRepository
+    private lateinit var tasksRepository: FakeTaskRepository
 
     // Set the main coroutines dispatcher for unit testing.
     @ExperimentalCoroutinesApi
     @get:Rule
-    var mainCoroutineRule = MainCoroutineRule()
+    val mainCoroutineRule = MainCoroutineRule()
 
     @Before
     fun setupStatisticsViewModel() {
-        tasksRepository = FakeRepository()
-
+        tasksRepository = FakeTaskRepository()
         statisticsViewModel = StatisticsViewModel(tasksRepository)
     }
 
     @Test
-    fun loadEmptyTasksFromRepository_EmptyResults() = mainCoroutineRule.runBlockingTest {
+    fun loadEmptyTasksFromRepository_EmptyResults() = runTest {
         // Given an initialized StatisticsViewModel with no tasks
 
         // Then the results are empty
-        assertThat(statisticsViewModel.empty.getOrAwaitValue()).isTrue()
+        val uiState = statisticsViewModel.uiState.first()
+        assertThat(uiState.isEmpty).isTrue()
     }
 
     @Test
-    fun loadNonEmptyTasksFromRepository_NonEmptyResults() {
+    fun loadNonEmptyTasksFromRepository_NonEmptyResults() = runTest {
         // We initialise the tasks to 3, with one active and two completed
-        val task1 = Task("Title1", "Description1")
-        val task2 = Task("Title2", "Description2", true)
-        val task3 = Task("Title3", "Description3", true)
-        val task4 = Task("Title4", "Description4", true)
+        val task1 = Task(id = "1", title = "Title1", description = "Desc1")
+        val task2 = Task(id = "2", title = "Title2", description = "Desc2", isCompleted = true)
+        val task3 = Task(id = "3", title = "Title3", description = "Desc3", isCompleted = true)
+        val task4 = Task(id = "4", title = "Title4", description = "Desc4", isCompleted = true)
         tasksRepository.addTasks(task1, task2, task3, task4)
 
         // Then the results are not empty
-        assertThat(statisticsViewModel.empty.getOrAwaitValue())
-            .isFalse()
-        assertThat(statisticsViewModel.activeTasksPercent.getOrAwaitValue())
-            .isEqualTo(25f)
-        assertThat(statisticsViewModel.completedTasksPercent.getOrAwaitValue())
-            .isEqualTo(75f)
+        val uiState = statisticsViewModel.uiState.first()
+        assertThat(uiState.isEmpty).isFalse()
+        assertThat(uiState.activeTasksPercent).isEqualTo(25f)
+        assertThat(uiState.completedTasksPercent).isEqualTo(75f)
+        assertThat(uiState.isLoading).isEqualTo(false)
     }
 
     @Test
-    fun loadStatisticsWhenTasksAreUnavailable_CallErrorToDisplay() {
-        val errorViewModel = StatisticsViewModel(
-            DefaultTasksRepository(
-                FakeFailingTasksRemoteDataSource,
-                FakeFailingTasksRemoteDataSource,
-                Dispatchers.Main // Main is set in MainCoroutineRule
-            )
-        )
+    fun loadTasks_loading() = runTest {
+        // Set Main dispatcher to not run coroutines eagerly, for just this one test
+        Dispatchers.setMain(StandardTestDispatcher())
 
-        // Then an error message is shown
-        assertThat(errorViewModel.empty.getOrAwaitValue()).isTrue()
-        assertThat(errorViewModel.error.getOrAwaitValue()).isTrue()
-    }
-
-    @Test
-    fun loadTasks_loading() {
-        // Pause dispatcher so we can verify initial values
-        mainCoroutineRule.pauseDispatcher()
-
-        // Load the task in the viewmodel
-        statisticsViewModel.refresh()
+        var isLoading: Boolean? = true
+        val job = launch {
+            statisticsViewModel.uiState.collect {
+                isLoading = it.isLoading
+            }
+        }
 
         // Then progress indicator is shown
-        assertThat(statisticsViewModel.dataLoading.getOrAwaitValue()).isTrue()
+        assertThat(isLoading).isTrue()
 
         // Execute pending coroutines actions
-        mainCoroutineRule.resumeDispatcher()
+        advanceUntilIdle()
 
         // Then progress indicator is hidden
-        assertThat(statisticsViewModel.dataLoading.getOrAwaitValue()).isFalse()
+        assertThat(isLoading).isFalse()
+        job.cancel()
     }
 }
